@@ -45,11 +45,11 @@ Logistic Regression classifier satisfying differential privacy.
 """
 import numbers
 import warnings
-import numbers
-import warnings
+
 from abc import ABCMeta
 from abc import abstractmethod
 from math import ceil
+
 import numpy as np
 from scipy import optimize
 from scipy.sparse import issparse
@@ -58,8 +58,14 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn import linear_model
 from sklearn import tree
 from sklearn.base import is_classifier
-from sklearn import _tree, _splitter, _criterion
-
+from sklearn.tree._tree import DepthFirstTreeBuilder
+from sklearn.tree._tree import BestFirstTreeBuilder
+from sklearn.tree._tree import Tree
+from sklearn.tree._tree import _build_pruned_tree_ccp
+from sklearn.tree._tree import ccp_pruning_path
+from sklearn.tree import _tree, _splitter, _criterion
+from sklearn.tree._criterion import Criterion
+from sklearn.tree._splitter import Splitter
 from sklearn.utils import check_X_y, check_array, check_consistent_length, check_random_state, compute_sample_weight
 from sklearn.utils.fixes import _joblib_parallel_args
 from sklearn.utils.multiclass import check_classification_targets
@@ -332,13 +338,52 @@ class DecisionTreeClassifier(tree.DecisionTreeClassifier):
                           "the 'X_idx_sorted' parameter.", FutureWarning)
 
         # Build tree
+        criterion = self.criterion
+        if not isinstance(criterion, Criterion):
+            if is_classification:
+                criterion = CRITERIA_CLF[self.criterion](self.n_outputs_,
+                                                         self.n_classes_)
+            else:
+                criterion = CRITERIA_REG[self.criterion](self.n_outputs_,
+                                                         n_samples)
 
-      
+        SPLITTERS = SPARSE_SPLITTERS if issparse(X) else DENSE_SPLITTERS
 
-       #Code for building tree depend on external files from main sklearn lib, do research on it and decide how to implement.
-       
+        splitter = self.splitter
+        if not isinstance(self.splitter, Splitter):
+            splitter = SPLITTERS[self.splitter](criterion,
+                                                self.max_features_,
+                                                min_samples_leaf,
+                                                min_weight_leaf,
+                                                random_state)
+
+        if is_classifier(self):
+            self.tree_ = Tree(self.n_features_,
+                              self.n_classes_, self.n_outputs_)
+        else:
+            self.tree_ = Tree(self.n_features_,
+                              # TODO: tree should't need this in this case
+                              np.array([1] * self.n_outputs_, dtype=np.intp),
+                              self.n_outputs_)
+
         # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
+        if max_leaf_nodes < 0:
+            builder = DepthFirstTreeBuilder(splitter, min_samples_split,
+                                            min_samples_leaf,
+                                            min_weight_leaf,
+                                            max_depth,
+                                            self.min_impurity_decrease,
+                                            min_impurity_split)
+        else:
+            builder = BestFirstTreeBuilder(splitter, min_samples_split,
+                                           min_samples_leaf,
+                                           min_weight_leaf,
+                                           max_depth,
+                                           max_leaf_nodes,
+                                           self.min_impurity_decrease,
+                                           min_impurity_split)
 
+        builder.build(self.tree_, X, y, sample_weight)
 
         if self.n_outputs_ == 1 and is_classifier(self):
             self.n_classes_ = self.n_classes_[0]
@@ -381,3 +426,4 @@ class DecisionTreeClassifier(tree.DecisionTreeClassifier):
         self.accountant.spend(self.epsilon, 0)
 
         return self
+
